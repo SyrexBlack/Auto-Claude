@@ -1,0 +1,85 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Python linting (Ruff)
+  python:
+    name: Python (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Pin ruff version to match .pre-commit-config.yaml (astral-sh/ruff-pre-commit rev)
+      - name: Install ruff
+        run: pip install ruff==0.14.10
+
+      - name: Run ruff check
+        run: ruff check apps/backend/ --output-format=github
+
+      - name: Run ruff format check
+        run: ruff format apps/backend/ --check --diff
+
+  # TypeScript/JavaScript linting (ESLint)
+  typescript:
+    name: TypeScript (ESLint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Get npm cache directory
+        id: npm-cache
+        run: echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ runner.os }}-npm-lint-${{ hashFiles('apps/frontend/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-lint-
+
+      - name: Install dependencies
+        working-directory: apps/frontend
+        run: npm ci --ignore-scripts
+
+      - name: Run ESLint
+        working-directory: apps/frontend
+        run: npm run lint
+
+  # Gate job for branch protection
+  lint-complete:
+    name: Lint Complete
+    runs-on: ubuntu-latest
+    needs: [python, typescript]
+    if: always()
+    steps:
+      - name: Check lint results
+        run: |
+          if [[ "${{ needs.python.result }}" != "success" ]] || \
+             [[ "${{ needs.typescript.result }}" != "success" ]]; then
+            echo "❌ Linting failed"
+            echo "  Python:     ${{ needs.python.result }}"
+            echo "  TypeScript: ${{ needs.typescript.result }}"
+            exit 1
+          fi
+          echo "✅ All linting passed"
